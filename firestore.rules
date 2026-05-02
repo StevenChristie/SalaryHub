@@ -1,0 +1,57 @@
+rules_version = '2';
+
+// SalaryHub — Firestore security rules
+// Strategy: deny by default; users can only read/write inside their own
+// /users/{uid} subtree. We additionally validate the shape of writes so
+// a compromised client can't store arbitrary fields or oversized blobs.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    function hasOnly(keys) {
+      return request.resource.data.keys().hasOnly(keys);
+    }
+
+    // Profile document: { salary: number, savings: number }
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId)
+        && hasOnly(['salary', 'savings'])
+        && (!('salary'  in request.resource.data) || (request.resource.data.salary  is number && request.resource.data.salary  >= 0))
+        && (!('savings' in request.resource.data) || (request.resource.data.savings is number && request.resource.data.savings >= 0));
+      allow delete: if isOwner(userId);
+
+      // Recurring expenses: { name: string, amount: number }
+      match /expenses/{expenseId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+          && hasOnly(['name', 'amount'])
+          && request.resource.data.name is string
+          && request.resource.data.name.size() > 0
+          && request.resource.data.name.size() <= 80
+          && request.resource.data.amount is number
+          && request.resource.data.amount >= 0;
+      }
+
+      // Transactions: { date, name: string, amount: number }
+      match /transactions/{txId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+          && hasOnly(['date', 'name', 'amount'])
+          && request.resource.data.name is string
+          && request.resource.data.name.size() > 0
+          && request.resource.data.name.size() <= 80
+          && request.resource.data.amount is number;
+      }
+    }
+
+    // Anything else: explicit deny.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
